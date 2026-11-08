@@ -4,6 +4,7 @@
 # Ignore Python bytecode files
 *.pyc[cod]
 __pycache__/
+.pytest_cache/
 
 # Ignore local IDE configuration files
 .idea/

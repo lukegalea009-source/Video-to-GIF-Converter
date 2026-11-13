@@ -8,3 +8,7 @@ class FFprobeNotFoundError(VideoMetadataError):
 
 class InvalidVideoError(VideoMetadataError):
     """Raised when the video cannot be inspected or parsed."""
+
+
+class GIFConversionError(Exception):
+    """Raised when GIF conversion fails."""

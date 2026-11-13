@@ -13,7 +13,7 @@ FFprobe for video metadata extraction, FFmpeg for conversion and PyQt6 for GUI f
 **External tools:** FFmpeg, FFprobe\
 **Version control:** Git
 
-# Planned Features
+# Added Features
 
 - Video-to-GIF conversion
 - FrameRate selector
@@ -21,4 +21,4 @@ FFprobe for video metadata extraction, FFmpeg for conversion and PyQt6 for GUI f
 
 # Development Status
 
-Early development -- Phase 1
+Synchronous GIF conversion is available -- Phase 3

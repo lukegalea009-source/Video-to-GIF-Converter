@@ -4,6 +4,8 @@ from PyQt6.QtWidgets import (
     QMainWindow,
 )
 
+from backend.exceptions import VideoMetadataError
+from backend.video_info import inspect_video
 
 
 

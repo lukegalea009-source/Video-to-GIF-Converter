@@ -9,3 +9,7 @@ __pycache__/
 # Ignore local IDE configuration files
 .idea/
 
+# Ignore personal tests
+test_outputs/
+test_inputs/
+test_main.py

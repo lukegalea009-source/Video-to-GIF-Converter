@@ -6,6 +6,7 @@ from backend.validators import validate_clip_times, validate_gif_settings, valid
 
 
 class VidToGIFConverter:
+    """Class containing methods used to communicate with FFmpeg."""
 
 
     @staticmethod
@@ -53,6 +54,7 @@ class VidToGIFConverter:
             fps: int,
             width: int
     ) -> None:
+        """Convert a selected video to a GIF"""
 
         if not validate_conversion_paths(
             input_path,

@@ -1,24 +1,18 @@
-from sys import argv
-from PyQt6.QtWidgets import (
-    QApplication,
-    QMainWindow,
-)
+import sys
 
-from backend.exceptions import VideoMetadataError
-from backend.video_info import inspect_video
-
+from PyQt6.QtWidgets import QApplication
+from gui.main_window import MainWindow
 
 
 def main() -> None:
+    """Responsible for launching the application."""
 
-    app: QApplication = QApplication(argv)
+    app: QApplication = QApplication(sys.argv)
 
-    window: QMainWindow = QMainWindow()
-    window.setWindowTitle("Video-to-GIF Converter")
-    window.resize(900, 600)
-
+    window = MainWindow()
     window.show()
-    app.exec()
+
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

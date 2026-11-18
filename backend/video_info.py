@@ -9,6 +9,7 @@ from backend.exceptions import (
 
 
 def inspect_video(file_path: str) -> dict:
+    """Returns input_path metadata using FFprobe."""
 
     try:
         result: subprocess.CompletedProcess = subprocess.run(

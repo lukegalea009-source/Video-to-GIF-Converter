@@ -21,4 +21,4 @@ FFprobe for video metadata extraction, FFmpeg for conversion and PyQt6 for GUI f
 
 # Development Status
 
-Synchronous GIF conversion is available -- Phase 3
+Fully asynchronous GIF converter GUI application shell is available -- Phase 5

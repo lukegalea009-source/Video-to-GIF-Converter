@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QDoubleSpinBox,
     QSpinBox,
+    QProgressBar
 )
 
 from PyQt6.QtMultimedia import (
@@ -25,7 +26,9 @@ from PyQt6.QtMultimediaWidgets import (
 
 from PyQt6.QtCore import (
     QUrl,
-    Qt
+    Qt,
+    QProcess,
+    QTimer
 )
 
 from backend.video_info import inspect_video
@@ -85,6 +88,9 @@ class MainWindow(QMainWindow):
 
         # === Viewer_container widgets ===
         self.viewer_layout: QVBoxLayout = QVBoxLayout(self.viewer_container)
+       
+        # === Asynchronous mode ===
+        self.ffmpeg_process: QProcess = QProcess(self)
 
         self.media_player: QMediaPlayer = QMediaPlayer(self)
         self.video_widget: QVideoWidget = QVideoWidget()
@@ -95,6 +101,7 @@ class MainWindow(QMainWindow):
         self.video_info: dict | None = None
         self.input_path: str | None = None
         self.output_path: str | None = None
+        self.active_output_path: Path | None = None
 
         # Input file select button
         self.select_video_button: QPushButton = QPushButton("Select Video")
@@ -120,6 +127,11 @@ class MainWindow(QMainWindow):
         self.timeline_controls.addWidget(self.position_label)
         self.timeline_controls.addWidget(self.timeline_slider)
         self.timeline_controls.addWidget(self.duration_label)
+
+        self.conversion_duration: float = 0.0
+        self.is_converting: bool = False
+        self.conversion_id: int = 0
+        self.cancel_requested: bool = False
 
         self.viewer_layout.addLayout(self.timeline_controls)
 
@@ -216,7 +228,24 @@ class MainWindow(QMainWindow):
         self.convert_button: QPushButton = QPushButton("Convert to GIF")
         self.convert_button.setEnabled(False)
 
-        self.controls_layout.addWidget(self.convert_button)
+        self.cancel_button: QPushButton = QPushButton("Cancel GIF")
+        self.cancel_button.setEnabled(False)
+
+        self.gif_button_layout: QHBoxLayout = QHBoxLayout()
+        self.gif_button_layout.addWidget(self.convert_button)
+        self.gif_button_layout.addWidget(self.cancel_button)
+
+        self.controls_layout.addLayout(self.gif_button_layout)
+
+        # Conversion progress bar
+        self.progress_buffer: str = ""
+
+        self.progress_bar: QProgressBar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+
+        self.controls_layout.addWidget(self.progress_bar)
+
 
         # === Signal Handling ===
         self.play_button.clicked.connect(
@@ -284,21 +313,28 @@ class MainWindow(QMainWindow):
         )
 
         self.convert_button.clicked.connect(
-            self.prepare_conversion
+            self.start_conversion
         )
 
+        self.ffmpeg_process.started.connect(
+            self.on_conversion_started
+        )
 
+        self.ffmpeg_process.readyReadStandardOutput.connect(
+            self.read_ffmpeg_progress
+        )
 
-        # === TEMPORARY AREA ===
+        self.ffmpeg_process.finished.connect(
+            self.on_conversion_finished
+        )
 
-        # Display layout temporarily
-        # self.controls_container.setStyleSheet(
-        #     "background-color: #56f5e2;"
-        # )
+        self.ffmpeg_process.errorOccurred.connect(
+            self.on_conversion_error
+        )
 
-        # self.video_widget.setStyleSheet(
-        #     "background-color: #20242e;"
-        # )
+        self.cancel_button.clicked.connect(
+            self.cancel_conversion
+        )
 
 
     @staticmethod
@@ -336,11 +372,13 @@ class MainWindow(QMainWindow):
 
     # Updates viewer control labels
     def update_position_label(self, position: int) -> None:
+        """Updates the duration slider based on the videos current lifetime."""
         timestamp = self.format_timestamp(position)
         self.position_label.setText(timestamp)
 
 
     def update_duration_label(self, duration: int) -> None:
+        """Displays the selected videos duration"""
         timestamp = self.format_timestamp(duration)
         self.duration_label.setText(timestamp)
 
@@ -409,22 +447,26 @@ class MainWindow(QMainWindow):
 
         
     def update_duration_from_slider(self, slider_value: int) -> None:
+        """Updates the duration spinbox with changes to the duration slider."""
         duration_value = slider_value / 10
         self.duration_spinbox.setValue(duration_value)
 
 
     def update_slider_from_duration(self, duration: float) -> None:
+        """Updates the duration slider with changes to the duration spinbox."""
         duration_value = round(duration * 10)
         self.duration_slider.setValue(duration_value)
 
 
     def update_end_time(self) -> None:
+        """Updates the end_time label."""
         st, dur = self.start_time_spinbox.value(), self.duration_spinbox.value()
         summed = st + dur
         self.end_time_label.setText(f"End time: {summed:.1f}s")
 
 
     def configure_clip_duration(self) -> None:
+        """Dynamically controls the clip duration with respect to start_time and clip duration."""
 
         if self.video_info is None:
             return
@@ -490,6 +532,12 @@ class MainWindow(QMainWindow):
 
 
     def update_convert_button_state(self) -> None:
+        """Updates the availablity of the button based on the specified requirements."""
+
+        if self.is_converting:
+            self.convert_button.setEnabled(False)
+            return
+
         if (
             self.input_path is None
             or self.output_path is None
@@ -546,7 +594,8 @@ class MainWindow(QMainWindow):
         self.update_convert_button_state()
 
 
-    def prepare_conversion(self) -> None:
+    def prepare_conversion(self) -> list[str] | None:
+        """Gets the neccessary data from the GUI to create the FFmpeg command."""
 
         if self.input_path is None or self.output_path is None or self.video_info is None:
             QMessageBox.warning(
@@ -612,14 +661,216 @@ class MainWindow(QMainWindow):
         print("Prepared FFmpeg command:")
         print(command)
 
-    
+        return command
 
 
-        
+    # Asynchronous conversion methods
+    def start_conversion(self) -> None:
+        """Start FFmpeg asynchronously after validating the request."""
 
-        
-        
+        if self.ffmpeg_process.state() != QProcess.ProcessState.NotRunning or self.is_converting:
+            return
+
+        command = self.prepare_conversion()
+
+        if command is None:
+            return
+
+        # Track only a validated destination that is still absent at launch.
+        if self.output_path is None:
+            return
+
+        output = Path(self.output_path)
+        if output.exists():
+            QMessageBox.warning(
+                self,
+                "Output Already Exists",
+                "Choose a different output filename."
+            )
+            return
+
+        self.active_output_path = output
+        self.cancel_requested = False
+
+        self.conversion_id += 1
+        self.conversion_duration = self.duration_spinbox.value()
+
+        program = command[0]
+        arguments = ["-progress", "pipe:1", "-nostats"] + command[1:]
+
+        self.progress_buffer = ""
+        self.progress_bar.setValue(0)
+        self.set_conversion_ui_state(True)
+
+        self.ffmpeg_process.start(program, arguments)
 
 
+    def on_conversion_started(self) -> None:
+        print("\nFFmpeg process started.")
 
-        
+
+    def on_conversion_finished(
+            self,
+            exit_code: int,
+            exit_status: QProcess.ExitStatus
+    ) -> None:
+        """Verify FFmpeg's result, handle cancellation, and restore the GUI."""
+
+        print("\nFFmpeg exit code:", exit_code)
+        process_success = (
+            exit_code == 0
+            and exit_status == QProcess.ExitStatus.NormalExit
+        )
+
+        # An exit code of zero alone does not verify that an output was written.
+        output_valid = False
+        if self.active_output_path is not None:
+            try:
+                output_valid = (
+                    self.active_output_path.is_file()
+                    and self.active_output_path.stat().st_size > 0
+                )
+            except OSError as error:
+                print(f"Could not verify GIF output: {error}")
+
+        success = process_success and output_valid
+
+        if success:
+            self.progress_bar.setValue(100)
+            title = "Conversion Successful"
+            message = "Your new GIF has been created successfully."
+        elif self.cancel_requested:
+            # FFmpeg has exited; a partial or zero-byte output may remain.
+            if self.active_output_path is not None:
+                try:
+                    self.active_output_path.unlink(missing_ok=True)
+                except OSError as error:
+                    print(f"Could not remove incomplete GIF: {error}")
+            title = "Conversion Cancelled"
+            message = "The GIF conversion was cancelled."
+        else:
+            title = "FFmpeg Error"
+            message = "FFmpeg could not complete the conversion or create a valid output file."
+
+        # Common cleanup runs for success, cancellation, and conversion failure.
+        self.cancel_requested = False
+        self.active_output_path = None
+        self.output_path = None
+        self.output_path_label.setText("No output selected")
+        self.set_conversion_ui_state(False)
+
+        if success or title == "Conversion Cancelled":
+            QMessageBox.information(self, title, message)
+        else:
+            QMessageBox.warning(self, title, message)
+
+
+    def on_conversion_error(
+            self,
+            error: QProcess.ProcessError
+    ) -> None:
+        """Check and display/print external process errors."""
+
+        error_message = self.ffmpeg_process.errorString()
+
+        if error == QProcess.ProcessError.FailedToStart:
+            # No FFmpeg process started, so keep the selected path for retry.
+            self.cancel_requested = False
+            self.active_output_path = None
+            self.set_conversion_ui_state(False)
+
+            QMessageBox.warning(
+                self,
+                "Conversion Failed to Start",
+                f"{error_message}"
+            )
+            return
+
+        print(error_message)
+
+
+    def read_ffmpeg_progress(self) -> None:
+        """Read complete progress lines from FFmpeg."""
+
+        raw_data = self.ffmpeg_process.readAllStandardOutput()
+        output = bytes(raw_data).decode("utf-8", errors="replace")
+
+        self.progress_buffer += output
+
+        while "\n" in self.progress_buffer:
+            line, self.progress_buffer = self.progress_buffer.split("\n", 1)
+            line = line.strip()
+
+            if line.startswith("out_time_us="):
+
+                key, value = line.split("=", 1)
+
+                try:
+                    value = int(value)
+
+                except ValueError as error:
+                    print(f"Malformed timestamp value detected:\n{error}")
+                    continue
+
+                # Convert from microseconds into seconds
+                value /= 1000000
+
+                # Relate to conversion duration
+                if self.conversion_duration <= 0:
+                    return
+                
+                value /= self.conversion_duration
+
+                # Get percentage
+                percentage = value * 100
+                percentage = min(99, max(0, round(percentage)))
+                self.progress_bar.setValue(percentage)
+
+
+    def set_conversion_ui_state(self, converting: bool) -> None:
+        """Enable or disable conversion-related controls."""
+
+        self.is_converting = converting
+
+        valid_clip = (
+            self.video_info is not None
+            and self.video_info["duration"] >= 0.1
+        )
+
+        self.select_video_button.setEnabled(not converting)
+        self.start_time_spinbox.setEnabled(not converting and valid_clip)
+        self.duration_spinbox.setEnabled(not converting and valid_clip)
+        self.duration_slider.setEnabled(not converting and valid_clip)
+        self.fps_spinbox.setEnabled(not converting)
+        self.width_spinbox.setEnabled(not converting)
+        self.select_output_button.setEnabled(not converting)
+        self.update_convert_button_state()
+        self.cancel_button.setEnabled(converting)
+
+
+    def cancel_conversion(self) -> None:
+        """Request cancellation of the active FFmpeg process."""
+
+        if self.ffmpeg_process.state() != QProcess.ProcessState.Running:
+            return
+
+        self.cancel_requested = True
+        self.cancel_button.setEnabled(False)
+
+        current_id: int = self.conversion_id
+
+        self.ffmpeg_process.terminate()
+        QTimer.singleShot(
+            2000,
+            lambda: self.check_cancellation_timeout(current_id)
+        )
+
+
+    def check_cancellation_timeout(self, current_id: int) -> None:
+        """Force-stop FFmpeg if cancellation has not completed."""
+
+        if not self.conversion_id == current_id:
+            return
+
+        if self.cancel_requested and self.ffmpeg_process.state() != QProcess.ProcessState.NotRunning:
+            self.ffmpeg_process.kill()

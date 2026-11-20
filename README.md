@@ -16,9 +16,13 @@ FFprobe for video metadata extraction, FFmpeg for conversion and PyQt6 for GUI f
 # Added Features
 
 - Video-to-GIF conversion
+- Media previewer
+- Starting point selector
+- Duration selector
 - FrameRate selector
 - GIF width selector
+- Cancel conversion button
 
 # Development Status
 
-Fully asynchronous GIF converter GUI application shell is available -- Phase 5
+Version 1.0 is now available

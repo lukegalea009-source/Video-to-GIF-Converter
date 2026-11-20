@@ -6,7 +6,7 @@ from frontend.main_window import MainWindow
 
 
 def load_stylesheet() -> str:
-    """Reads application stylesheet"""
+    """Reads application stylesheet."""
     stylesheet_path = Path(__file__).resolve().parent / "frontend" / "styles" / "dark_theme.qss"
 
     stylesheet = stylesheet_path.read_text(
